@@ -1,9 +1,10 @@
 # turbo-esp32（ESP32 基础固件，Arduino 框架）
 
 按《ESP32 开发基础固件 V1.0》实现的可复用基础固件：烧录后通过串口命令行查询系统信息、
-查看 Wi-Fi 状态、扫描网络、重启设备。后续可在此基础上叠加 MQTT / OLED / 传感器 / 舵机。
+查看 Wi-Fi 状态、扫描网络、重启设备，并提供基于 espMqttClient 的 MQTT 基础连接。
+后续可在此基础上叠加 OLED / 传感器 / 舵机。
 
-- 固件版本：`turbo-esp32.v1.1.0`
+- 固件版本：`turbo-esp32.v1.2.0`
 - 框架：Arduino-ESP32（core `esp32:esp32@3.3.12`）
 - 实测硬件：ESP32-D0WD-V3（双核 240 MHz / 4 MB Flash / MAC `50:1F:86:A9:9B:20`）
 - 串口：115200 8-N-1
@@ -28,7 +29,8 @@ esp32-feature/
         │   └── system.h/.cpp   system info / heap / flash / nvs / reboot
         ├── modules/         # 功能模块
         │   ├── network.h/.cpp  网络状态接口 net::Provider
-        │   └── wifi.h/.cpp     Wi-Fi 连接、扫描、凭据(经 ConfigManager)、命令
+        │   ├── wifi.h/.cpp     Wi-Fi 连接、扫描、凭据(经 ConfigManager)、命令
+        │   └── mqtt.h/.cpp     MQTT 连接（espMqttClient + NVS 配置）
         └── drivers/         # 硬件驱动
             ├── driver.h         drivers::Driver 接口
             └── driver.cpp       驱动注册表（当前无具体驱动）
@@ -50,13 +52,19 @@ esp32-feature/
 ```bash
 cd ~/Desktop/esp32-feature
 
+make setup            # 首次：安装 ESP32 核心 + MQTT 依赖库
 make build            # 编译
 make upload           # 编译并烧录（自动探测串口）
 make log              # 带时间戳看串口输出（Ctrl+C 退出）
 ```
 
-用 Arduino IDE 的用户：打开 `src/foundation/foundation.ino`，选板子 `ESP32 Dev Module`、
-选对串口、115200 打开监视器即可，行结束符选 `Newline` 或 `Both NL & CR`。
+`make setup`（或单独的 `make libs`）会把 **espMqttClient 1.7.3** 和它声明的 **AsyncTCP 3.4.9**
+下载到项目内的 `.arduino15/user/libraries/`，不影响系统。espMqttClient 没有收录在 Arduino
+Library Manager，用 Arduino IDE 的用户需要手动下载这两个库的 ZIP
+（[espMqttClient v1.7.3](https://github.com/bertmelis/espMqttClient/archive/refs/tags/v1.7.3.zip)、
+[AsyncTCP v3.4.9](https://github.com/ESP32Async/AsyncTCP/archive/refs/tags/v3.4.9.zip)）
+并「Sketch → Include Library → Add .ZIP Library」；随后打开 `src/foundation/foundation.ino`，
+选板子 `ESP32 Dev Module`、串口、115200，行结束符选 `Newline` 或 `Both NL & CR`。
 
 ## 命令
 
@@ -83,32 +91,75 @@ make log              # 带时间戳看串口输出（Ctrl+C 退出）
 凭据存在 NVS（命名空间 `wifi`），**断电、重启、重新烧录都不会丢**，统一由 `core::config` 管理；
 日志只显示密码是否已设置，不打印内容。
 
+## MQTT
+
+MQTT 客户端使用 [espMqttClient](https://github.com/bertmelis/espMqttClient) 1.7.3（MQTT 3.1.1，
+当前只开 **plain TCP**，默认端口 1883；暂不支持 TLS）。客户端内部使用 FreeRTOS 任务，
+主循环里的 `poll()` 只做网络检查和重连调度，不会被 TCP 连接阻塞。
+
+> espMqttClient 的 async 源码也会参与 Arduino 库编译，所以还必须安装它声明的
+> AsyncTCP 3.4.9（本固件只用同步客户端，没有用到 async 实现）。
+
+配置存 NVS 命名空间 `mqtt`（经 ConfigManager）：
+
+| 命令 | 作用 |
+|---|---|
+| `mqtt status` | broker、client id、keepalive、网络、连接状态（不打印密码） |
+| `mqtt set host <host>` | broker 主机名或 IP |
+| `mqtt set port <1-65535>` | 端口，默认 1883 |
+| `mqtt set client <id>` | client id；不设置则自动生成 `turbo-<MAC尾6位>` |
+| `mqtt set user <username>` | 用户名；`mqtt set user`（不带值）清除 |
+| `mqtt set pass <password>` | 密码；`mqtt set pass`（不带值）清除 |
+| `mqtt set keepalive <seconds>` | keepalive，默认 60 秒 |
+| `mqtt connect` / `mqtt disconnect` | 开/关自动连接（设置持久化到 NVS） |
+| `mqtt clear` | 清空整个 `mqtt` 命名空间 |
+
+示例（把地址换成你自己的 broker）：
+
+```
+mqtt set host 192.168.1.10
+mqtt set port 1883
+mqtt set client turbo-test
+mqtt connect
+mqtt status
+```
+
+配好 host 且 `enabled=yes` 时，Wi-Fi 一拿到 IP 就会连接；断线后每 5 秒重试。
+当前只实现连接层，还没有 subscribe / publish 命令。
+
 ## 启动输出
 
 ```
 ================================
- turbo-esp32.v1.1.0
+ turbo-esp32.v1.2.0
  Framework: Arduino-ESP32
  Type 'help' for commands.
 ================================
 [WiFi] Connection started.
 [WiFi] Using saved SSID "MyWiFi" (password set)
 [WiFi] Connecting to "MyWiFi" ...
+[MQTT] Not configured. Use 'mqtt set host <host>'.
 [INFO] Use 'wifi status' to check connection.
 ```
 
 未配置凭据时提示：`[WiFi] No credentials stored. Use 'wifi set <ssid> <password>'.`
+MQTT 已配置时启动栏会显示：`[MQTT] Broker <host>:<port>, client "...", auto-connect on.`
 
 ## 验收测试（文档第 8 节）
 
 | 测试项 | 操作 | 结果 |
 |---|---|---|
 | 启动日志 | 复位开发板 | ✅ 输出固件版本与框架信息 |
-| 帮助命令 | `help` | ✅ 列出全部 10 条命令 |
+| 帮助命令 | `help` | ✅ 列出全部 15 条命令 |
 | 芯片信息 | `system info` | ✅ `ESP32-D0WD-V3 rev 301 / 240 MHz / 4 MB / SDK v5.5.5` |
 | 内存查询 | `system heap` | ✅ 例：`Free Heap: 235532 bytes` |
-| Flash 查询 | `system flash` | ✅ `4096 KB / app0 1280 KB / Sketch 68% / 6 个分区` |
-| NVS 查询 | `system nvs` | ✅ 实测 `129 used / 630 total (20%)`，4 个命名空间 |
+| Flash 查询 | `system flash` | ✅ `4096 KB / app0 1280 KB / Sketch 70% / 6 个分区` |
+| NVS 查询 | `system nvs` | ✅ 实测 `130 used / 630 total (20%)`，5 个命名空间 |
+| MQTT 未配置 | `mqtt status` | ✅ 提示 `Not configured`，自动生成 client id |
+| MQTT 配置 | `mqtt set host/port/client/user/pass/keepalive` | ✅ 全部写入 NVS；`mqtt status` 不显示密码 |
+| MQTT 配置持久化 | `mqtt set ...` → `reboot` → `mqtt status` | ✅ 重启后 broker/client/keepalive 保持不变 |
+| MQTT 清除配置 | `mqtt clear` → `mqtt status` | ✅ 恢复 `NOT CONFIGURED` |
+| MQTT 真实连接 | 配置 broker + 已连 Wi-Fi | ⬜ 板上无 Wi-Fi 凭据、无可用 broker，未测 |
 | 配置持久化 | `wifi set __cm_test__` → `reboot` → `wifi status` | ✅ 重启后仍显示 `Configured SSID: __cm_test__` |
 | 清除配置 | `wifi forget` → `wifi status` | ✅ 恢复为 `Configured SSID: (none)` |
 | Wi-Fi 状态 | `wifi status` | ✅ 已连接显示 IP/RSSI/MAC；未连接显示状态码 |
@@ -131,6 +182,10 @@ make log              # 带时间戳看串口输出（Ctrl+C 退出）
 8. **Arduino 只编译 `sketch/src/`**：源码放在其它子目录会不被编译；跨层包含必须用相对路径。
 9. **`Preferences::putString` 对空字符串返回 0**：不能用返回值判断写入成败；ConfigManager 改为
    写入后回读校验，否则 `wifi set <ssid>`（无密码）会被误判为失败。
+10. **espMqttClient 保存的是指针**：`setServer()` / `setCredentials()` / `setClientId()` 不会复制字符串，
+    配置必须放在生命周期长的固定缓冲区，不能用临时 `String` 或局部变量。
+11. **espMqttClient 的 async 源码也会被 Arduino 编译**：库构建会编译所有 `.cpp`，因此即使只用同步
+    客户端，也必须安装它声明的 AsyncTCP，否则报 `AsyncTCP.h: No such file or directory`。
 
 ## 已知限制
 
@@ -138,13 +193,14 @@ make log              # 带时间戳看串口输出（Ctrl+C 退出）
 - 经典 ESP32 只支持 **2.4 GHz**，连 5 GHz 热点必然失败。
 - 串口同一时刻只能被一个程序打开；`make log` 开着时不能烧录。
 - NVS 分区只有 **20 KB**：配置项/命名空间要节制，写满时 ConfigManager 会返回失败并打 `[ERROR]`。
+- MQTT 当前只支持 plain TCP，不支持 TLS/8883；也还没有 subscribe / publish 命令。
+- MQTT 密码以明文形式保存在 NVS（未启用 NVS 加密），不要把生产环境密钥放进来。
 - GPIO / 舵机 / 外设命令未实现：需要先确认板型、引脚用途和供电，不能随意驱动。
 
 ## 后续扩展路线（文档第 10 节）
 
 | 模块 | 目录约定 | 建议命令 |
 |---|---|---|
-| MQTT | `modules/mqtt.h/.cpp` | `mqtt status` / `mqtt publish` |
 | OLED | `drivers/oled_ssd1306.h/.cpp` | `oled test` / `oled show wifi` |
 | 传感器 | `drivers/sensor_xxx.h/.cpp` | `sensor read` / `sensor list` |
 | 舵机 | `drivers/servo.h/.cpp` | `servo test` / `servo move <id> <angle>` |

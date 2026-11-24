@@ -1,4 +1,4 @@
-// foundation.ino —— turbo-esp32.v1.1.0（Arduino 框架）
+// foundation.ino —— turbo-esp32.v1.2.0（Arduino 框架）
 //
 // 三层结构（详见 AGENTS.md）：
 //   core    串口、命令行、系统管理      —— 尽量稳定，不依赖上层
@@ -16,6 +16,7 @@
 #include "src/core/logger.h"
 #include "src/core/system.h"
 #include "src/drivers/driver.h"
+#include "src/modules/mqtt.h"
 #include "src/modules/wifi.h"
 
 void setup() {
@@ -26,6 +27,7 @@ void setup() {
   core::config.begin();          // 初始化 NVS（所有配置的唯一入口）
   core::sys::begin();            // 注册 system info / system heap / reboot
   modules::wifi::begin();        // 注册 wifi 命令 + 加载凭据 + 发起连接
+  modules::mqtt::begin();        // 加载 MQTT 配置 + 注册 mqtt 命令
   drivers::beginAll();           // 初始化已注册的硬件驱动（当前为空）
 
   logger::line("[INFO] Use 'help' to list commands, 'wifi status' to check network.");
@@ -34,8 +36,9 @@ void setup() {
 void loop() {
   core::console::poll();         // 串口命令（非阻塞）
   modules::wifi::poll();         // 网络维护（非阻塞）
+  modules::mqtt::poll();         // MQTT 连接维护（非阻塞）
   drivers::pollAll();            // 硬件驱动（非阻塞）
 
   // 后续扩展在此接线，例如：
-  // modules::mqtt::poll();
+  // modules::sensor::poll();
 }

@@ -19,9 +19,15 @@ BUILD  := .build/$(notdir $(SKETCH))
 PORT ?= $(shell $(CLI_CFG) board list 2>/dev/null | awk '$$1 ~ /^\/dev\/cu\.(usbserial|wchusbserial|usbmodem|SLAB_USBtoUART|wch)/ {print $$1; exit}')
 
 .DEFAULT_GOAL := help
-.PHONY: help setup ports board build upload monitor log flash clean doctor
+.PHONY: help setup libs ports board build upload monitor log flash clean doctor
 
 PY := ./.venv/bin/python
+
+# MQTT 依赖库：espMqttClient 未收录在 Arduino Library Manager，
+# 安装到项目内（.arduino15/user/libraries），不污染系统。
+ESPMQTT_VERSION  ?= 1.7.3
+ASYNCTCP_VERSION ?= 3.4.9
+LIBS_DIR         := .arduino15/user/libraries
 
 # 串口同一时刻只能被一个程序打开；被占用时给出明确提示而不是晦涩的 esptool 报错
 define check_port
@@ -33,7 +39,8 @@ endef
 
 help: ## 显示可用命令
 	@echo "ESP32 开发快捷命令"
-	@echo "  make setup    安装/校验 ESP32 核心（首次必做）"
+	@echo "  make setup    安装/校验 ESP32 核心 + MQTT 依赖（首次必做）"
+	@echo "  make libs     只安装 MQTT 依赖库（espMqttClient + AsyncTCP）"
 	@echo "  make ports    列出串口和已连接的开发板"
 	@echo "  make build    编译 $(SKETCH) -> $(FQBN)"
 	@echo "  make upload   编译并烧录到自动探测的串口"
@@ -46,9 +53,31 @@ help: ## 显示可用命令
 	@echo "换板子: make upload FQBN=esp32:esp32:esp32s3"
 	@echo "指定串口: make upload PORT=/dev/cu.usbserial-0001"
 
-setup: ## 安装 ESP32 Arduino 核心
+setup: libs ## 安装 ESP32 Arduino 核心 + MQTT 依赖库
 	$(CLI_CFG) core update-index
 	$(CLI_CFG) core install esp32:esp32
+
+libs: ## 安装 MQTT 依赖库（espMqttClient + AsyncTCP）
+	@mkdir -p $(LIBS_DIR)
+	@if [ ! -f $(LIBS_DIR)/espMqttClient/library.properties ]; then \
+	  echo "安装 espMqttClient $(ESPMQTT_VERSION) ..."; \
+	  set -e; \
+	  tmp=$$(mktemp -d); \
+	  curl -fsSL "https://github.com/bertmelis/espMqttClient/archive/refs/tags/v$(ESPMQTT_VERSION).tar.gz" -o $$tmp/lib.tar.gz; \
+	  tar -xzf $$tmp/lib.tar.gz -C $(LIBS_DIR); \
+	  mv $(LIBS_DIR)/espMqttClient-$(ESPMQTT_VERSION) $(LIBS_DIR)/espMqttClient; \
+	  rm -rf $$tmp; \
+	fi
+	@if [ ! -f $(LIBS_DIR)/AsyncTCP/library.properties ]; then \
+	  echo "安装 AsyncTCP $(ASYNCTCP_VERSION) ..."; \
+	  set -e; \
+	  tmp=$$(mktemp -d); \
+	  curl -fsSL "https://github.com/ESP32Async/AsyncTCP/archive/refs/tags/v$(ASYNCTCP_VERSION).tar.gz" -o $$tmp/lib.tar.gz; \
+	  tar -xzf $$tmp/lib.tar.gz -C $(LIBS_DIR); \
+	  mv $(LIBS_DIR)/AsyncTCP-$(ASYNCTCP_VERSION) $(LIBS_DIR)/AsyncTCP; \
+	  rm -rf $$tmp; \
+	fi
+	@echo "MQTT 依赖库就绪: espMqttClient + AsyncTCP"
 
 ports: ## 列出串口/开发板
 	@$(CLI_CFG) board list
@@ -58,7 +87,7 @@ board: ## 显示当前生效的配置
 	@echo "SKETCH = $(SKETCH)"
 	@echo "PORT   = $(if $(PORT),$(PORT),<未检测到，请插上 USB 或手动指定 PORT=>)"
 
-build: ## 编译
+build: libs ## 编译
 	@mkdir -p $(BUILD)
 	$(CLI_CFG) compile --fqbn $(FQBN) --build-path $(BUILD) --warnings default $(SKETCH)
 
@@ -87,6 +116,7 @@ flash: upload ## 编译+烧录，然后提示看日志
 doctor: ## 工具链体检
 	@echo "== arduino-cli =="; $(CLI) version
 	@echo "== 已安装核心 =="; $(CLI_CFG) core list
+	@echo "== 依赖库 =="; $(CLI_CFG) lib list
 	@echo "== 串口 =="; $(CLI_CFG) board list
 	@echo "== 目录占用 =="; du -sh .arduino15 .tools 2>/dev/null
 	@echo "== 目标板 =="; echo "FQBN=$(FQBN)"
