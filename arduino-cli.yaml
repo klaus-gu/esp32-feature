@@ -1,0 +1,13 @@
+# 项目内自包含的 arduino-cli 配置：所有下载/工具链都留在本目录，不污染系统
+board_manager:
+  additional_urls:
+    - https://espressif.github.io/arduino-esp32/package_esp32_index.json
+
+directories:
+  # 相对路径以项目根目录为基准（make 在根目录运行），目录改名/移动后仍然有效
+  data: ./.arduino15
+  downloads: ./.arduino15/staging
+  user: ./.arduino15/user
+
+library:
+  enable_unsafe_install: false
