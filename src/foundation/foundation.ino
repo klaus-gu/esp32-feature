@@ -1,4 +1,4 @@
-// foundation.ino —— ESP32 Foundation Firmware v1.0（Arduino 框架）
+// foundation.ino —— turbo-esp32.v1.1.0（Arduino 框架）
 //
 // 三层结构（详见 AGENTS.md）：
 //   core    串口、命令行、系统管理      —— 尽量稳定，不依赖上层
@@ -11,6 +11,7 @@
 #include <Arduino.h>
 
 #include "src/config.h"
+#include "src/core/config_manager.h"
 #include "src/core/console.h"
 #include "src/core/logger.h"
 #include "src/core/system.h"
@@ -22,6 +23,7 @@ void setup() {
   delay(500);                    // 等 USB 串口就绪，避免开头几行丢失
 
   core::console::begin();        // 启动横幅 + 注册 help
+  core::config.begin();          // 初始化 NVS（所有配置的唯一入口）
   core::sys::begin();            // 注册 system info / system heap / reboot
   modules::wifi::begin();        // 注册 wifi 命令 + 加载凭据 + 发起连接
   drivers::beginAll();           // 初始化已注册的硬件驱动（当前为空）

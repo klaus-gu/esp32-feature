@@ -35,7 +35,7 @@ void begin() {
   // 横幅
   logger::blank();
   logger::line("================================");
-  logger::line(" %s v%s", FW_NAME, FW_VERSION);
+  logger::line(" %s", FW_ID);
   logger::line(" Framework: %s", FW_FRAMEWORK);
   logger::line(" Type 'help' for commands.");
   logger::line("================================");

@@ -6,8 +6,11 @@
 
 #include <Arduino.h>
 
-#define FW_NAME      "ESP32 Foundation Firmware"
-#define FW_VERSION   "1.0"
+// 固件标识：统一名称 turbo-esp32，版本遵循 SemVer 2.0.0（见 AGENTS.md 4.1）。
+// 完整标识形如 turbo-esp32.v1.1.0；FW_VERSION 只存数字，不要再带 'v'。
+#define FW_NAME      "turbo-esp32"
+#define FW_VERSION   "1.1.0"
+#define FW_ID        FW_NAME ".v" FW_VERSION
 #define FW_FRAMEWORK "Arduino-ESP32"
 
 namespace cfg {

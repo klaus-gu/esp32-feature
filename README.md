@@ -1,9 +1,9 @@
-# ESP32 Foundation Firmware V1.0（Arduino 框架）
+# turbo-esp32（ESP32 基础固件，Arduino 框架）
 
 按《ESP32 开发基础固件 V1.0》实现的可复用基础固件：烧录后通过串口命令行查询系统信息、
 查看 Wi-Fi 状态、扫描网络、重启设备。后续可在此基础上叠加 MQTT / OLED / 传感器 / 舵机。
 
-- 固件版本：`1.0`
+- 固件版本：`turbo-esp32.v1.1.0`
 - 框架：Arduino-ESP32（core `esp32:esp32@3.3.12`）
 - 实测硬件：ESP32-D0WD-V3（双核 240 MHz / 4 MB Flash / MAC `50:1F:86:A9:9B:20`）
 - 串口：115200 8-N-1
@@ -11,24 +11,24 @@
 ## 目录结构
 
 ```
-esp32-dev/
+esp32-feature/
 ├── Makefile
 ├── AGENTS.md                # ★ 架构与协作约定（改固件前必读）
 ├── arduino-cli.yaml
 ├── tools/monitor.py         # 带时间戳 + 自动复位的串口日志工具
-├── archive/                 # 早期实验代码归档（不参与编译）
 └── src/foundation/
     ├── foundation.ino       # 只做编排：把三层接进 setup/loop
     └── src/
         ├── config.h         # 版本号、串口参数、NVS 键名
-        ├── core/            # 串口、命令行、系统管理（最稳定）
+        ├── core/            # 串口、命令行、配置、系统管理（最稳定）
+        │   ├── config_manager.h/.cpp  NVS 配置管理（唯一入口）
         │   ├── logger.h/.cpp   统一输出，自动补 CRLF
         │   ├── command.h/.cpp  命令注册表（新命令自动进 help）
         │   ├── console.h/.cpp  输入、回显、退格、超长保护
-        │   └── system.h/.cpp   system info / system heap / reboot
+        │   └── system.h/.cpp   system info / heap / flash / nvs / reboot
         ├── modules/         # 功能模块
         │   ├── network.h/.cpp  网络状态接口 net::Provider
-        │   └── wifi.h/.cpp     Wi-Fi 连接、扫描、凭据(NVS)、命令
+        │   └── wifi.h/.cpp     Wi-Fi 连接、扫描、凭据(经 ConfigManager)、命令
         └── drivers/         # 硬件驱动
             ├── driver.h         drivers::Driver 接口
             └── driver.cpp       驱动注册表（当前无具体驱动）
@@ -39,10 +39,16 @@ esp32-dev/
 新增命令用 `command::add()` 注册，不需要改 console；新增驱动实现 `Driver` 并 `drivers::add()`，
 不需要改主循环。详细规则与"新增模块/驱动"的步骤见 [AGENTS.md](AGENTS.md)。
 
+## 配置存储
+
+所有应用配置只存 **NVS**，并统一由 `core/config_manager.h` 的 `core::config`（ConfigManager）读写；
+其它代码禁止直接 include `<Preferences.h>` / `<nvs.h>`。命名空间按模块划分
+（`wifi`、`mqtt`、`oled`……），命名空间和键名都不得超过 15 字符（NVS 硬限制）。
+
 ## 快速开始
 
 ```bash
-cd ~/Desktop/esp32-dev
+cd ~/Desktop/esp32-feature
 
 make build            # 编译
 make upload           # 编译并烧录（自动探测串口）
@@ -65,20 +71,23 @@ make log              # 带时间戳看串口输出（Ctrl+C 退出）
 | `wifi scan` | 扫描附近网络（SSID / RSSI / 信道 / 加密类型） |
 | `reboot` | 重启设备 |
 
-额外提供的两条（文档 6.1 建议「凭据存放在适当的配置存储中」，否则换 WiFi 就要重新烧录）：
+扩展命令（凭据存储与诊断）：
 
 | 命令 | 作用 |
 |---|---|
-| `wifi set <ssid> [密码]` | 写入 NVS 并立即连接（SSID 含空格用双引号） |
+| `wifi set <ssid> [密码]` | 通过 ConfigManager 写入 NVS 并立即连接（SSID 含空格用双引号） |
 | `wifi forget` | 删除已保存凭据 |
+| `system flash` | Flash 总量、运行分区/Sketch 占用、OTA 槽位、完整分区表 |
+| `system nvs` | NVS 分区、条目使用率、固件使用的命名空间 |
 
-凭据存在 NVS（命名空间 `wifi`），**断电、重启、重新烧录都不会丢**；日志只显示密码是否已设置，不打印内容。
+凭据存在 NVS（命名空间 `wifi`），**断电、重启、重新烧录都不会丢**，统一由 `core::config` 管理；
+日志只显示密码是否已设置，不打印内容。
 
 ## 启动输出
 
 ```
 ================================
- ESP32 Foundation Firmware v1.0
+ turbo-esp32.v1.1.0
  Framework: Arduino-ESP32
  Type 'help' for commands.
 ================================
@@ -95,9 +104,13 @@ make log              # 带时间戳看串口输出（Ctrl+C 退出）
 | 测试项 | 操作 | 结果 |
 |---|---|---|
 | 启动日志 | 复位开发板 | ✅ 输出固件版本与框架信息 |
-| 帮助命令 | `help` | ✅ 列出 6 条命令 + 2 条扩展 |
+| 帮助命令 | `help` | ✅ 列出全部 10 条命令 |
 | 芯片信息 | `system info` | ✅ `ESP32-D0WD-V3 rev 301 / 240 MHz / 4 MB / SDK v5.5.5` |
 | 内存查询 | `system heap` | ✅ 例：`Free Heap: 235532 bytes` |
+| Flash 查询 | `system flash` | ✅ `4096 KB / app0 1280 KB / Sketch 68% / 6 个分区` |
+| NVS 查询 | `system nvs` | ✅ 实测 `129 used / 630 total (20%)`，4 个命名空间 |
+| 配置持久化 | `wifi set __cm_test__` → `reboot` → `wifi status` | ✅ 重启后仍显示 `Configured SSID: __cm_test__` |
+| 清除配置 | `wifi forget` → `wifi status` | ✅ 恢复为 `Configured SSID: (none)` |
 | Wi-Fi 状态 | `wifi status` | ✅ 已连接显示 IP/RSSI/MAC；未连接显示状态码 |
 | Wi-Fi 扫描 | `wifi scan` | ✅ 实测扫到 28 个网络 |
 | 网络断开 | 关闭路由器 | ⬜ 需真实热点，未测 |
@@ -116,22 +129,26 @@ make log              # 带时间戳看串口输出（Ctrl+C 退出）
 6. **不要把功能堆进 `.ino`**：按文档 11.1 拆成 core / modules / drivers 三层。
 7. **`log` 不能作命名空间**：与 `math.h` 的 `log()` 撞名，已改名 `logger`。
 8. **Arduino 只编译 `sketch/src/`**：源码放在其它子目录会不被编译；跨层包含必须用相对路径。
+9. **`Preferences::putString` 对空字符串返回 0**：不能用返回值判断写入成败；ConfigManager 改为
+   写入后回读校验，否则 `wifi set <ssid>`（无密码）会被误判为失败。
 
 ## 已知限制
 
 - `wifi scan` 是**同步扫描**，会阻塞 3~5 秒（文档 6 节已说明，后续可改异步）。
 - 经典 ESP32 只支持 **2.4 GHz**，连 5 GHz 热点必然失败。
 - 串口同一时刻只能被一个程序打开；`make log` 开着时不能烧录。
+- NVS 分区只有 **20 KB**：配置项/命名空间要节制，写满时 ConfigManager 会返回失败并打 `[ERROR]`。
 - GPIO / 舵机 / 外设命令未实现：需要先确认板型、引脚用途和供电，不能随意驱动。
 
 ## 后续扩展路线（文档第 10 节）
 
 | 模块 | 目录约定 | 建议命令 |
 |---|---|---|
-| MQTT | `mqtt/mqtt_manager.h/.cpp` | `mqtt status` / `mqtt publish` |
-| OLED | `drivers/oled/` | `oled test` / `oled show wifi` |
-| 传感器 | `drivers/sensor/` | `sensor read` / `sensor list` |
-| 舵机 | `drivers/servo/` | `servo test` / `servo move <id> <angle>` |
+| MQTT | `modules/mqtt.h/.cpp` | `mqtt status` / `mqtt publish` |
+| OLED | `drivers/oled_ssd1306.h/.cpp` | `oled test` / `oled show wifi` |
+| 传感器 | `drivers/sensor_xxx.h/.cpp` | `sensor read` / `sensor list` |
+| 舵机 | `drivers/servo.h/.cpp` | `servo test` / `servo move <id> <angle>` |
 
-新增模块只需在 `foundation.ino` 的 `loop()` 里调用其 `poll()`，命令解析仍放在 `console.cpp`。
+新增模块只需在 `foundation.ino` 里调 `begin()` / `poll()`；命令用 `command::add()` 注册；
+配置用 `core::config` 存 NVS（规则见 AGENTS.md 2.4）。
 舵机必须独立供电，机械臂还需要本地急停与看门狗，网络指令不承担实时安全控制。

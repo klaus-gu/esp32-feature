@@ -10,18 +10,17 @@
 #include "wifi.h"
 
 #include <Arduino.h>
-#include <Preferences.h>
 #include <WiFi.h>
 #include <string.h>
 
 #include "../config.h"
 #include "../core/command.h"
+#include "../core/config_manager.h"
 #include "../core/logger.h"
 #include "network.h"
 
 namespace {
 
-Preferences gPrefs;
 String      gSsid;
 String      gPass;
 bool        gHasCreds     = false;
@@ -42,29 +41,36 @@ const char* statusText(wl_status_t s) {
 }
 
 void loadCredentials() {
-  gPrefs.begin(cfg::NVS_NAMESPACE, true);   // 只读
-  gSsid = gPrefs.getString(cfg::NVS_KEY_SSID, "");
-  gPass = gPrefs.getString(cfg::NVS_KEY_PASS, "");
-  gPrefs.end();
+  gSsid = core::config.getString(cfg::NVS_NAMESPACE, cfg::NVS_KEY_SSID, "");
+  gPass = core::config.getString(cfg::NVS_NAMESPACE, cfg::NVS_KEY_PASS, "");
   gHasCreds = gSsid.length() > 0;
 }
 
-void saveCredentials(const char* ssid, const char* pass) {
-  gPrefs.begin(cfg::NVS_NAMESPACE, false);
-  gPrefs.putString(cfg::NVS_KEY_SSID, ssid);
-  gPrefs.putString(cfg::NVS_KEY_PASS, pass == nullptr ? "" : pass);
-  gPrefs.end();
+bool saveCredentials(const char* ssid, const char* pass) {
+  const String password = (pass == nullptr) ? "" : pass;
+
+  const bool okSsid = core::config.setString(cfg::NVS_NAMESPACE, cfg::NVS_KEY_SSID, ssid);
+  const bool okPass = core::config.setString(cfg::NVS_NAMESPACE, cfg::NVS_KEY_PASS, password.c_str());
+  if (!okSsid || !okPass) {
+    // 避免留下一半新一半旧的凭据；内存状态也同步清空，保持与 NVS 一致
+    core::config.remove(cfg::NVS_NAMESPACE, cfg::NVS_KEY_SSID);
+    core::config.remove(cfg::NVS_NAMESPACE, cfg::NVS_KEY_PASS);
+    gSsid = "";
+    gPass = "";
+    gHasCreds = false;
+    logger::line("[ERROR] Failed to save WiFi credentials to NVS.");
+    return false;
+  }
 
   gSsid = ssid;
-  gPass = (pass == nullptr) ? "" : pass;
+  gPass = password;
   gHasCreds = true;
+  return true;
 }
 
 void clearCredentials() {
-  gPrefs.begin(cfg::NVS_NAMESPACE, false);
-  gPrefs.remove(cfg::NVS_KEY_SSID);
-  gPrefs.remove(cfg::NVS_KEY_PASS);
-  gPrefs.end();
+  core::config.remove(cfg::NVS_NAMESPACE, cfg::NVS_KEY_SSID);
+  core::config.remove(cfg::NVS_NAMESPACE, cfg::NVS_KEY_PASS);
 
   gSsid = "";
   gPass = "";
@@ -211,7 +217,9 @@ void setCommand(const char* args) {
   }
 
   const char* pass = (argc >= 2) ? argv[1] : "";
-  saveCredentials(argv[0], pass);
+  if (!saveCredentials(argv[0], pass)) {
+    return;
+  }
   logger::line("[WiFi] Credentials saved to NVS. SSID=\"%s\" password=%s",
             gSsid.c_str(), gPass.length() ? "set" : "(empty/open)");
   startConnect();
