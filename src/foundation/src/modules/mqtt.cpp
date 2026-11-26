@@ -448,5 +448,21 @@ void poll() {
   }
 }
 
+bool configured() {
+  return gConfigured;
+}
+
+bool connected() {
+  return gClient.connected();
+}
+
+const char* configuredHost() {
+  return gHost;
+}
+
+uint16_t configuredPort() {
+  return gPort;
+}
+
 }  // namespace mqtt
 }  // namespace modules

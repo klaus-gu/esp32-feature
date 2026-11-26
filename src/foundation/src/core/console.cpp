@@ -4,6 +4,7 @@
 //   · 缓冲区有上限，超长立即报错并丢弃整行
 //   · 回车兼容 \r\n / \n / \r，\r\n 不会重复执行
 //   · 本地回显 + 退格，普通串口监视器里也看得见自己打的字
+//   · 空闲时显示 '>' 提示符
 //   · 丢弃 0x00/0xFF 噪声字节，行首只接受可见 ASCII
 
 #include "console.h"
@@ -21,9 +22,15 @@ char   gBuf[cfg::CMD_BUFFER_SIZE];
 size_t gLen         = 0;
 bool   gLastWasCR   = false;
 bool   gDiscardLine = false;   // 本行已因超长报错，余下字符全部丢弃
+bool   gPromptReady = false;   // 启动摘要打印完后才允许交互
 
 void helpHandler(const char* /*args*/) {
   command::printHelp();
+}
+
+void printPrompt() {
+  logger::putc('>');
+  gPromptReady = true;
 }
 
 }  // namespace
@@ -44,7 +51,15 @@ void begin() {
   command::add("help", helpHandler, "Show command list");
 }
 
+void prompt() {
+  printPrompt();
+}
+
 void poll() {
+  if (!gPromptReady) {
+    return;
+  }
+
   while (Serial.available() > 0) {
     const int rawByte = Serial.read();
     if (rawByte < 0) {
@@ -69,6 +84,7 @@ void poll() {
       }
       gLen = 0;
       gDiscardLine = false;
+      printPrompt();
       continue;
     }
     gLastWasCR = false;

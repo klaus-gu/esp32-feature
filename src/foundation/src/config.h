@@ -7,9 +7,9 @@
 #include <Arduino.h>
 
 // 固件标识：统一名称 turbo-esp32，版本遵循 SemVer 2.0.0（见 AGENTS.md 4.1）。
-// 完整标识形如 turbo-esp32.v1.2.0；FW_VERSION 只存数字，不要再带 'v'。
+// 完整标识形如 turbo-esp32.v1.3.0；FW_VERSION 只存数字，不要再带 'v'。
 #define FW_NAME      "turbo-esp32"
-#define FW_VERSION   "1.2.0"
+#define FW_VERSION   "1.3.0"
 #define FW_ID        FW_NAME ".v" FW_VERSION
 #define FW_FRAMEWORK "Arduino-ESP32"
 
@@ -21,6 +21,7 @@ constexpr size_t   CMD_BUFFER_SIZE = 128;   // 127 字符 + '\0'
 
 // ── Wi-Fi ──
 constexpr uint32_t WIFI_RETRY_MS = 10000;
+constexpr uint8_t  WIFI_MAX_RETRIES = 5;   // 首次尝试之后的自动重试上限
 
 // ── MQTT ──
 constexpr uint16_t MQTT_PORT_DEFAULT      = 1883;

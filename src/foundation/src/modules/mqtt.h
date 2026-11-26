@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <stdint.h>
+
 namespace modules {
 namespace mqtt {
 
@@ -14,6 +16,16 @@ void begin();
 
 // 周期调用：网络状态、断线重连、配置热更新（不阻塞）
 void poll();
+
+// 是否已配置 broker（host 非空）
+bool configured();
+
+// 是否已连接 broker（收到 CONNACK）
+bool connected();
+
+// 已配置的 broker 主机名/端口（未配置时 host 为空）
+const char* configuredHost();
+uint16_t configuredPort();
 
 }  // namespace mqtt
 }  // namespace modules

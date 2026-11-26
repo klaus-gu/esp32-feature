@@ -14,5 +14,8 @@ void begin();
 // 处理串口输入（非阻塞，主循环里反复调用）
 void poll();
 
+// 打印一次 '>' 提示符；启动摘要完成后由 boardinfo 调用
+void prompt();
+
 }  // namespace console
 }  // namespace core

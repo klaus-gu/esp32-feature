@@ -25,6 +25,8 @@ String      gSsid;
 String      gPass;
 bool        gHasCreds     = false;
 bool        gWasConnected = false;
+uint8_t     gRetryCount   = 0;
+bool        gGaveUp       = false;
 uint32_t    gLastAttempt  = 0;
 
 const char* statusText(wl_status_t s) {
@@ -76,13 +78,21 @@ void clearCredentials() {
   gPass = "";
   gHasCreds = false;
   gWasConnected = false;
+  gRetryCount = 0;
+  gGaveUp = false;
 }
 
 // 发起一次连接。
 // 必须先 disconnect() 取消上一个仍在进行的请求：否则 ESP-IDF 会报
 // "sta is connecting, cannot set config"，新参数不生效。
-void startConnect(bool announce = true) {
-  if (announce) {
+void startConnect(bool announce = true, bool isRetry = false) {
+  if (isRetry && gRetryCount < 255) {
+    gRetryCount++;
+  }
+  if (isRetry) {
+    logger::line("[WiFi] Retry %u/%u: connecting to \"%s\" ...", gRetryCount,
+                 cfg::WIFI_MAX_RETRIES, gSsid.c_str());
+  } else if (announce) {
     logger::line("[WiFi] Connecting to \"%s\" ...", gSsid.c_str());
   } else {
     logger::line("[WiFi] Resuming connection attempt...");
@@ -130,6 +140,12 @@ void printStatusCommand(const char* /*args*/) {
     logger::line("[WiFi] DISCONNECTED");
     logger::line("Status Code: %d (%s)", static_cast<int>(st), statusText(st));
     logger::line("Configured SSID: %s", gHasCreds ? gSsid.c_str() : "(none)");
+    if (gGaveUp) {
+      logger::line("Auto-retry:     stopped (failed after %u retries)",
+                   cfg::WIFI_MAX_RETRIES);
+    } else if (gHasCreds) {
+      logger::line("Retries:        %u/%u", gRetryCount, cfg::WIFI_MAX_RETRIES);
+    }
   }
   logger::blank();
 }
@@ -166,7 +182,7 @@ void scanCommand(const char* /*args*/) {
   WiFi.scanDelete();
   logger::blank();
 
-  if (wasConnecting) {
+  if (wasConnecting && !gGaveUp) {
     startConnect(false);
   }
 }
@@ -222,6 +238,8 @@ void setCommand(const char* args) {
   }
   logger::line("[WiFi] Credentials saved to NVS. SSID=\"%s\" password=%s",
             gSsid.c_str(), gPass.length() ? "set" : "(empty/open)");
+  gRetryCount = 0;
+  gGaveUp = false;
   startConnect();
 }
 
@@ -233,6 +251,21 @@ void forgetCommand(const char* /*args*/) {
   logger::line("[WiFi] Credentials cleared.");
 }
 
+void connectCommand(const char* /*args*/) {
+  if (!gHasCreds) {
+    logger::line("[ERROR] No WiFi credentials. Use 'wifi set <ssid> <password>'.");
+    return;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    logger::line("[WiFi] Already connected.");
+    return;
+  }
+  gRetryCount = 0;
+  gGaveUp = false;
+  gLastAttempt = 0;
+  startConnect();
+}
+
 }  // namespace
 
 namespace modules {
@@ -241,6 +274,7 @@ namespace wifi {
 void begin() {
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);      // 关闭省电：扫描/连接时串口更稳定
+  WiFi.setAutoReconnect(false);  // 重连由本模块统一控制（上限/提示）
   WiFi.persistent(false);    // 不让 WiFi 库往 NVS 写副本，凭据由本模块管理
 
   loadCredentials();
@@ -249,6 +283,7 @@ void begin() {
   command::add("wifi status", printStatusCommand, "Show WiFi status");
   command::add("wifi scan", scanCommand, "Scan nearby WiFi networks");
   command::add("wifi set", setCommand, "Save credentials: wifi set <ssid> [password]");
+  command::add("wifi connect", connectCommand, "Retry saved WiFi credentials");
   command::add("wifi forget", forgetCommand, "Erase saved credentials");
 
   // 向 modules 层暴露网络状态接口
@@ -256,9 +291,13 @@ void begin() {
 
   if (!gHasCreds) {
     logger::line("[WiFi] No credentials stored. Use 'wifi set <ssid> <password>'.");
+  }
+}
+
+void start() {
+  if (!gHasCreds) {
     return;
   }
-
   logger::line("[WiFi] Connection started.");
   logger::line("[WiFi] Using saved SSID \"%s\" (password %s)",
             gSsid.c_str(), gPass.length() ? "set" : "empty/open");
@@ -271,8 +310,10 @@ void poll() {
   if (connected != gWasConnected) {
     gWasConnected = connected;
     if (connected) {
-      logger::line("[WiFi] Connected. IP=%s RSSI=%d dBm",
-                WiFi.localIP().toString().c_str(), WiFi.RSSI());
+      gRetryCount = 0;
+      gGaveUp = false;
+      logger::line("[WiFi] Connected. SSID=\"%s\" IP=%s RSSI=%d dBm",
+                WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
     } else if (gHasCreds) {
       logger::line("[WiFi] Connection lost (%s).", statusText(WiFi.status()));
     }
@@ -281,10 +322,31 @@ void poll() {
   if (!gHasCreds || connected) {
     return;
   }
+  if (gGaveUp) {
+    return;
+  }
+
+  if (gRetryCount >= cfg::WIFI_MAX_RETRIES) {
+    if (millis() - gLastAttempt >= cfg::WIFI_RETRY_MS) {
+      gGaveUp = true;
+      logger::line("[WiFi] Connection failed after %u retries. Auto-retry stopped.",
+                   cfg::WIFI_MAX_RETRIES);
+      WiFi.disconnect(false, false);
+    }
+    return;
+  }
 
   if (millis() - gLastAttempt >= cfg::WIFI_RETRY_MS) {
-    startConnect();
+    startConnect(true, true);
   }
+}
+
+bool hasCredentials() {
+  return gHasCreds;
+}
+
+const char* configuredSsid() {
+  return gSsid.c_str();
 }
 
 }  // namespace wifi

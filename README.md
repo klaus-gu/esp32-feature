@@ -4,9 +4,9 @@
 查看 Wi-Fi 状态、扫描网络、重启设备，并提供基于 espMqttClient 的 MQTT 基础连接。
 后续可在此基础上叠加 OLED / 传感器 / 舵机。
 
-- 固件版本：`turbo-esp32.v1.2.0`
+- 固件版本：`turbo-esp32.v1.3.0`
 - 框架：Arduino-ESP32（core `esp32:esp32@3.3.12`）
-- 实测硬件：ESP32-D0WD-V3（双核 240 MHz / 4 MB Flash / MAC `50:1F:86:A9:9B:20`）
+- 实测硬件：ESP32-D0WD-V3（双核 240 MHz / 4 MB Flash / MAC `20:9B:A9:86:1F:50`）
 - 串口：115200 8-N-1
 
 ## 目录结构
@@ -30,7 +30,9 @@ esp32-feature/
         ├── modules/         # 功能模块
         │   ├── network.h/.cpp  网络状态接口 net::Provider
         │   ├── wifi.h/.cpp     Wi-Fi 连接、扫描、凭据(经 ConfigManager)、命令
-        │   └── mqtt.h/.cpp     MQTT 连接（espMqttClient + NVS 配置）
+        │   ├── mqtt.h/.cpp     MQTT 连接（espMqttClient + NVS 配置）
+        │   ├── doctor.h/.cpp   功能自检（doctor 命令）
+        │   └── boardinfo.h/.cpp 开机板卡摘要（资源/MAC/WiFi/MQTT）
         └── drivers/         # 硬件驱动
             ├── driver.h         drivers::Driver 接口
             └── driver.cpp       驱动注册表（当前无具体驱动）
@@ -84,12 +86,22 @@ Library Manager，用 Arduino IDE 的用户需要手动下载这两个库的 ZIP
 | 命令 | 作用 |
 |---|---|
 | `wifi set <ssid> [密码]` | 通过 ConfigManager 写入 NVS 并立即连接（SSID 含空格用双引号） |
+| `wifi connect` | 用已保存凭据重新连接，并重置重试计数 |
 | `wifi forget` | 删除已保存凭据 |
 | `system flash` | Flash 总量、运行分区/Sketch 占用、OTA 槽位、完整分区表 |
 | `system nvs` | NVS 分区、条目使用率、固件使用的命名空间 |
+| `doctor` | 四项功能自检：Wi-Fi 配置/连接、MQTT 配置/连接 |
 
 凭据存在 NVS（命名空间 `wifi`），**断电、重启、重新烧录都不会丢**，统一由 `core::config` 管理；
 日志只显示密码是否已设置，不打印内容。
+
+Wi-Fi 自动连接策略：
+
+- 首次连接之后，最多自动重试 **5 次**，间隔 10 秒
+- 5 次仍失败：打印 `[WiFi] Connection failed after 5 retries. Auto-retry stopped.`，停止自动重试
+- `wifi status` 会显示 `Auto-retry: stopped` 或当前 `Retries: n/5`
+- `wifi connect` / `wifi set` 会重置计数并重新开始
+- 已关闭 Arduino core 的自动重连，避免绕过这个上限
 
 ## MQTT
 
@@ -127,20 +139,68 @@ mqtt status
 配好 host 且 `enabled=yes` 时，Wi-Fi 一拿到 IP 就会连接；断线后每 5 秒重试。
 当前只实现连接层，还没有 subscribe / publish 命令。
 
+## 功能自检 doctor
+
+`doctor` 是固件内的只读自检命令，检查四项：
+
+1. Wi-Fi 是否已保存凭据
+2. Wi-Fi 是否已连接（有 IP）
+3. MQTT 是否已配置 broker
+4. MQTT 是否已连接（收到 CONNACK）
+
+不修改配置、不打印密码；Wi-Fi 状态走 `net::provider()`，MQTT 状态走模块公开接口。
+输出示例：
+
+```
+[DOCTOR]
+WiFi configured:    NO
+WiFi connected:     NO
+MQTT configured:    NO
+MQTT connected:     NO
+Result:            0/4 checks passed
+
+[DOCTOR] Set WiFi: wifi set <ssid> <password>
+[DOCTOR] Set MQTT broker: mqtt set host <host>
+```
+
+注意：`make doctor` 是宿主机工具链体检，`doctor` 是板子固件命令，两者不是一回事。
+
 ## 启动输出
 
 ```
 ================================
- turbo-esp32.v1.2.0
+ turbo-esp32.v1.3.0
  Framework: Arduino-ESP32
  Type 'help' for commands.
 ================================
+[MQTT] Not configured. Use 'mqtt set host <host>'.
+[INFO] Use 'wifi status' to check connection.
+
+[BOARD]
+Firmware:      turbo-esp32.v1.3.0
+Chip:          ESP32-D0WD-V3 rev 301
+CPU:           240 MHz
+SDK:           v5.5.5
+Flash:         4194304 B (4096 KB)
+App:           app0 1280 KB, sketch 927184 B (70%), free 374 KB
+Heap:          free 224868 / 328688 B, min 224600
+NVS:           135/630 entries (21%), 20 KB
+MAC (WiFi):    20:9B:A9:86:1F:50
+WiFi:          configured "MyWiFi"
+MQTT:          not configured
+
 [WiFi] Connection started.
 [WiFi] Using saved SSID "MyWiFi" (password set)
 [WiFi] Connecting to "MyWiFi" ...
-[MQTT] Not configured. Use 'mqtt set host <host>'.
-[INFO] Use 'wifi status' to check connection.
+>
 ```
+
+提示符是单个 `>`（后面不带空格），在启动摘要和 Wi-Fi 启动日志之后出现。
+
+开机摘要只展示**配置快照**，不展示 WiFi/MQTT 的实时连接状态和 IP：WiFi 行显示已保存的 SSID，
+MQTT 行显示已配置的 `host:port`。摘要打印完之后才开始连接 Wi-Fi；Wi-Fi 连通后，MQTT 才会
+在 `poll()` 中发起连接（前提是 MQTT 已配置）。Wi-Fi 连接成功后会另打
+`[WiFi] Connected. SSID="..." IP=... RSSI=...`。
 
 未配置凭据时提示：`[WiFi] No credentials stored. Use 'wifi set <ssid> <password>'.`
 MQTT 已配置时启动栏会显示：`[MQTT] Broker <host>:<port>, client "...", auto-connect on.`
@@ -150,19 +210,26 @@ MQTT 已配置时启动栏会显示：`[MQTT] Broker <host>:<port>, client "..."
 | 测试项 | 操作 | 结果 |
 |---|---|---|
 | 启动日志 | 复位开发板 | ✅ 输出固件版本与框架信息 |
-| 帮助命令 | `help` | ✅ 列出全部 15 条命令 |
+| 开机摘要 | 复位开发板 | ✅ `[BOARD]` 在 Wi-Fi 连接前输出芯片/CPU/Flash/App/Heap/NVS/MAC + WiFi/MQTT 配置快照 |
+| 提示符 | 开机后 / 命令执行后 | ✅ 显示 `>`；退格不会擦掉提示符；命令后重新出现 |
+| 帮助命令 | `help` | ✅ 列出全部 17 条命令 |
 | 芯片信息 | `system info` | ✅ `ESP32-D0WD-V3 rev 301 / 240 MHz / 4 MB / SDK v5.5.5` |
 | 内存查询 | `system heap` | ✅ 例：`Free Heap: 235532 bytes` |
 | Flash 查询 | `system flash` | ✅ `4096 KB / app0 1280 KB / Sketch 70% / 6 个分区` |
-| NVS 查询 | `system nvs` | ✅ 实测 `130 used / 630 total (20%)`，5 个命名空间 |
+| NVS 查询 | `system nvs` | ✅ 实测 `135 used / 630 total (21%)`，5 个命名空间 |
+| 自检未配置 | `doctor` | ✅ 0/4，提示先配置 Wi-Fi 和 MQTT |
+| 自检已配置未连接 | `wifi set __doctor_test__` + `mqtt set host ...` → `doctor` | ✅ 2/4（Wi-Fi 配置、MQTT 配置通过），提示检查连接 |
+| 自检全部连接 | 真实 Wi-Fi + broker | ⬜ Wi-Fi 已联网；缺真实 broker，未测 |
 | MQTT 未配置 | `mqtt status` | ✅ 提示 `Not configured`，自动生成 client id |
 | MQTT 配置 | `mqtt set host/port/client/user/pass/keepalive` | ✅ 全部写入 NVS；`mqtt status` 不显示密码 |
 | MQTT 配置持久化 | `mqtt set ...` → `reboot` → `mqtt status` | ✅ 重启后 broker/client/keepalive 保持不变 |
 | MQTT 清除配置 | `mqtt clear` → `mqtt status` | ✅ 恢复 `NOT CONFIGURED` |
-| MQTT 真实连接 | 配置 broker + 已连 Wi-Fi | ⬜ 板上无 Wi-Fi 凭据、无可用 broker，未测 |
+| MQTT 真实连接 | 配置 broker + 已连 Wi-Fi | ⬜ Wi-Fi 已联网；板上无可用 broker，未测 |
 | 配置持久化 | `wifi set __cm_test__` → `reboot` → `wifi status` | ✅ 重启后仍显示 `Configured SSID: __cm_test__` |
 | 清除配置 | `wifi forget` → `wifi status` | ✅ 恢复为 `Configured SSID: (none)` |
-| Wi-Fi 状态 | `wifi status` | ✅ 已连接显示 IP/RSSI/MAC；未连接显示状态码 |
+| Wi-Fi 状态 | `wifi status` | ✅ 已连接显示 SSID/IP/RSSI/MAC；未连接显示状态码/重试次数 |
+| Wi-Fi 重试上限 | 断开热点后等待 | ✅ `Retry 1/5`…`Retry 5/5`，约 60 秒后提示 `Connection failed after 5 retries` |
+| 手动重连 | `wifi connect` | ✅ 重置计数并重新尝试（实测恢复到 `Retries: 1/5`） |
 | Wi-Fi 扫描 | `wifi scan` | ✅ 实测扫到 28 个网络 |
 | 网络断开 | 关闭路由器 | ⬜ 需真实热点，未测 |
 | 网络恢复 | 恢复路由器 | ⬜ 需真实热点，未测 |

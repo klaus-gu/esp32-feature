@@ -1,4 +1,4 @@
-// foundation.ino —— turbo-esp32.v1.2.0（Arduino 框架）
+// foundation.ino —— turbo-esp32.v1.3.0（Arduino 框架）
 //
 // 三层结构（详见 AGENTS.md）：
 //   core    串口、命令行、系统管理      —— 尽量稳定，不依赖上层
@@ -16,6 +16,8 @@
 #include "src/core/logger.h"
 #include "src/core/system.h"
 #include "src/drivers/driver.h"
+#include "src/modules/boardinfo.h"
+#include "src/modules/doctor.h"
 #include "src/modules/mqtt.h"
 #include "src/modules/wifi.h"
 
@@ -26,11 +28,16 @@ void setup() {
   core::console::begin();        // 启动横幅 + 注册 help
   core::config.begin();          // 初始化 NVS（所有配置的唯一入口）
   core::sys::begin();            // 注册 system info / system heap / reboot
-  modules::wifi::begin();        // 注册 wifi 命令 + 加载凭据 + 发起连接
+  modules::wifi::begin();        // 注册 wifi 命令 + 加载凭据（暂不连接）
   modules::mqtt::begin();        // 加载 MQTT 配置 + 注册 mqtt 命令
+  modules::doctor::begin();      // 注册 doctor 自检命令
   drivers::beginAll();           // 初始化已注册的硬件驱动（当前为空）
 
   logger::line("[INFO] Use 'help' to list commands, 'wifi status' to check network.");
+  modules::boardinfo::begin();   // 开机板卡摘要（只展示配置快照）
+
+  modules::wifi::start();        // 摘要打印后才开始连接 Wi-Fi
+  core::console::prompt();       // Wi-Fi 连接日志之后再出提示符
 }
 
 void loop() {
